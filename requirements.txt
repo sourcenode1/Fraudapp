@@ -1,0 +1,7 @@
+streamlit
+pandas
+numpy
+shap==0.41.0
+matplotlib
+joblib
+catboost
