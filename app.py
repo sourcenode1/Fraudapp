@@ -6,28 +6,37 @@ import matplotlib.pyplot as plt
 import joblib
 from catboost import Pool
 import warnings
-warnings.filterwarnings("ignore")
+import os
 
-# --- Constants and Seed ---
+warnings.filterwarnings("ignore")
 GLOBAL_SEED = 50
 np.random.seed(GLOBAL_SEED)
 
-# --- Load trained model ---
+# ---------------- Load model ----------------
 @st.cache_resource(show_spinner=True)
-def load_model():
-    model = joblib.load("final_AIML_model.pkl")
-    return model
+def load_model(path="final_AIML_model.pkl"):
+    if not os.path.exists(path):
+        st.error(f"Model file '{path}' not found in the repo!")
+        return None
+    return joblib.load(path)
 
 model = load_model()
+if model is None:
+    st.stop()
 
-# --- Load sample input for UI ---
+# ---------------- Load sample input ----------------
 @st.cache_data
-def load_sample_input():
-    return pd.read_csv("warranty_claim_fraud_detection_cleaned.csv")
+def load_sample_input(path="warranty_claim_fraud_detection_cleaned.csv"):
+    if not os.path.exists(path):
+        st.warning(f"Sample input CSV '{path}' not found in the repo!")
+        return pd.DataFrame()
+    return pd.read_csv(path)
 
 sample_input = load_sample_input()
+if sample_input.empty:
+    st.warning("No sample input loaded. Manual entry will still work.")
 
-# --- Mappings ---
+# ---------------- Feature mappings ----------------
 days_mapping = {'more than 30': 4, '15 to 30': 3, '8 to 15': 2, '1 to 7': 1, 'none': 0, 'NA': 0}
 claims_mapping = {'none': 0, '1': 1, '2 to 4': 3, 'more than 4': 5, 'NA': 0}
 vehicle_age_mapping = {'new': 0, '1 year': 1, '2 years': 2, '3 years': 3, '4 years': 4,
@@ -40,17 +49,14 @@ address_change_mapping = {'no change': 0, 'under 6 months': 1, '1 year': 2, '2 t
 number_of_cars_mapping = {'1 vehicle': 1, '2 vehicles': 2, '3 to 4': 3, '5 to 8': 5,
                           'more than 8': 9, 'NA': 0}
 
-# --- Categorical columns ---
 categorical_cols = ['Month', 'DayOfWeek', 'Make', 'AccidentArea',
                     'DayOfWeekClaimed', 'MonthClaimed', 'Sex', 'MaritalStatus',
                     'Fault', 'PolicyType', 'VehicleCategory', 'VehiclePrice',
                     'PoliceReportFiled', 'WitnessPresent', 'AgentType', 'BasePolicy']
 
-# --- Function to apply mappings ---
+# ---------------- Preprocess input ----------------
 def preprocess_input(df):
     df = df.copy()
-
-    # Map features
     df['Days_Policy_Accident'] = df['Days_Policy_Accident'].map(days_mapping).fillna(0)
     df['Days_Policy_Claim'] = df['Days_Policy_Claim'].map(days_mapping).fillna(0)
     df['PastNumberOfClaims'] = df['PastNumberOfClaims'].map(claims_mapping).fillna(0)
@@ -60,27 +66,24 @@ def preprocess_input(df):
     df['AddressChange_Claim'] = df['AddressChange_Claim'].map(address_change_mapping).fillna(0)
     df['NumberOfCars'] = df['NumberOfCars'].map(number_of_cars_mapping).fillna(0)
 
-    # Categorical columns as string and fillna 'NA'
     for col in categorical_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).fillna('NA')
     return df
 
-# --- Streamlit UI ---
+# ---------------- Streamlit UI ----------------
 st.title("🚨 Warranty Claim Fraud Detection")
 st.markdown("""
-This proof-of-concept app uses a **AI/ML classifier** to detect fraudulent warranty claims.
-You can input new claim data manually or upload a CSV file to get predictions and explanations.
+This app detects **fraudulent warranty claims** using a CatBoost ML model.
+You can input data manually or upload a CSV file.
 """)
 
 st.sidebar.header("Input Options")
 input_method = st.sidebar.radio("Select Input Method:", ["Manual Entry", "Upload CSV"])
-
 input_df = None
 
 if input_method == "Manual Entry":
     st.subheader("🔧 Manual Input")
-
     manual_input = {}
     for col in sample_input.columns:
         if col in categorical_cols:
@@ -92,7 +95,6 @@ if input_method == "Manual Entry":
             except Exception:
                 mean_val = 0.0
             manual_input[col] = st.number_input(f"{col}", value=mean_val)
-
     input_df = pd.DataFrame([manual_input])
     input_df = preprocess_input(input_df)
 
@@ -103,21 +105,20 @@ elif input_method == "Upload CSV":
         input_df = pd.read_csv(uploaded_file)
         input_df = preprocess_input(input_df)
 
-if input_df is not None:
+if input_df is not None and not input_df.empty:
     st.write("### Input Data Preview")
     st.dataframe(input_df)
 
-    # Prepare pool with categorical feature indices
+    # Prepare CatBoost Pool
     cat_indices = [input_df.columns.get_loc(c) for c in categorical_cols if c in input_df.columns]
     pool = Pool(input_df, cat_features=cat_indices)
 
-    # Predict probabilities
+    # Predict
     proba = model.predict_proba(pool)[:, 1]
 
-    # Threshold slider
+    # Threshold
     st.subheader("⚖️ Adjust Decision Threshold")
-    threshold = st.slider("Probability Threshold", min_value=0.0, max_value=1.0, value=0.31, step=0.01)
-
+    threshold = st.slider("Probability Threshold", 0.0, 1.0, 0.31, 0.01)
     preds = (proba > threshold).astype(int)
     labels = np.where(preds == 1, "⚠️ Fraud", "✅ Not Fraud")
 
@@ -127,8 +128,6 @@ if input_df is not None:
 
     st.write("### Prediction Results")
     st.dataframe(results_df[['Fraud_Probability', 'Prediction']])
-
-    # Latest prediction highlight
     st.success(f"Latest prediction: **{labels[-1]}** with probability **{proba[-1]:.2f}**")
 
     # SHAP explanation
@@ -136,27 +135,28 @@ if input_df is not None:
     try:
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(input_df)
-
         st.set_option('deprecation.showPyplotGlobalUse', False)
-        plt.title("SHAP Summary Plot")
+        plt.figure()
         shap.summary_plot(shap_values, input_df, show=False)
         st.pyplot(bbox_inches='tight')
     except Exception as e:
         st.warning(f"SHAP explanation failed: {e}")
 
-# --- Model Performance Section ---
+# ---------------- Model Performance ----------------
 st.subheader("📊 Model Performance Visualizations")
-
 col1, col2 = st.columns(2)
 with col1:
-    st.image("pr_curve.png", caption="Precision-Recall Curve", use_column_width=True)
+    if os.path.exists("pr_curve.png"):
+        st.image("pr_curve.png", caption="Precision-Recall Curve", use_column_width=True)
 with col2:
-    st.image("shap_summary.png", caption="SHAP Summary Plot", use_column_width=True)
+    if os.path.exists("shap_summary.png"):
+        st.image("shap_summary.png", caption="SHAP Summary Plot", use_column_width=True)
 
 st.markdown("---")
-st.markdown("You can download the detailed PDF report below:")
-
-with open("AIML_fraud_detection_report.pdf", "rb") as f:
-    st.download_button("📄 Download PDF Report", f, file_name="AIML_fraud_detection_report.pdf")
+if os.path.exists("AIML_fraud_detection_report.pdf"):
+    with open("AIML_fraud_detection_report.pdf", "rb") as f:
+        st.download_button("📄 Download PDF Report", f, file_name="AIML_fraud_detection_report.pdf")
+else:
+    st.info("PDF report not found in the repo.")
 
 st.caption("Developed as a Proof-of-Concept for warranty claim fraud detection using AI/ML.")
