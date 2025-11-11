@@ -1,9 +1,20 @@
+# Core
 streamlit==1.39.0
-pandas==2.2.3
 numpy==1.26.4
+pandas==2.2.3
 matplotlib==3.9.2
-shap==0.46.0
-joblib==1.4.2
-catboost==1.2.5
 scipy==1.16.3
 scikit-learn==1.5.2
+
+# Model handling
+joblib==1.4.2
+catboost==1.2.5
+
+# Explainability
+shap==0.46.0
+
+# Optional (needed by SHAP and plotting)
+cycler==0.12.1
+kiwisolver==1.4.9
+fonttools==4.60.1
+pillow==10.4.0
